@@ -190,7 +190,6 @@ public class ServerHTTPService implements IService, Runnable {
                     }
                     try {
                         putFile(content_type, content.getBytes(), resource);
-                        log("Client post success.");
                     } catch (Exception e) {
                         e.printStackTrace();
                         res = new ResponseMessage(500);
@@ -255,12 +254,18 @@ public class ServerHTTPService implements IService, Runnable {
     }
 
     private void putFile(String content_type, byte[] content, String dir) throws Exception {
+        if (dir.equals("/") || dir.equals("\\")) {
+            dir = "";
+        }
         if (!content_type.startsWith("text")) {
             content = Base64.getMimeDecoder().decode(content);
         }
-        Path file = Paths.get(System.getProperty("user.dir"));
-        file = file.resolve(dir);
-        file = file.resolve(System.currentTimeMillis() + "." + MimeType.getPostfix(content_type));
+        Path file = Paths.get(
+                System.getProperty("user.dir"),
+                "dustbin",
+                dir,
+                System.currentTimeMillis() + "." + MimeType.getPostfix(content_type)
+        );
         if (!Files.exists(file)) {
             Files.createFile(file);
         }
@@ -361,15 +366,15 @@ public class ServerHTTPService implements IService, Runnable {
                 while (iterator.hasNext()) {
                     Map.Entry<SelectionKey, Long> conn = iterator.next();
                     SelectionKey key = conn.getKey();
-                    if (key.attachment().equals("handling")){
-                        lastConn.replace(key,System.currentTimeMillis());
+                    if (key.attachment().equals("handling")) {
+                        lastConn.replace(key, System.currentTimeMillis());
                         continue;
                     }
                     SocketChannel channel = (SocketChannel) key.channel();
                     long lastConnTimeMillis = conn.getValue();
                     if (System.currentTimeMillis() - lastConnTimeMillis > timeout) {
                         try {
-                            log("Kill connection from " + bytesToIP(channel.socket().getInetAddress().getAddress()));
+                            log("Kill connection from " + channel.socket().getRemoteSocketAddress().toString());
                             key.cancel();
                             channel.socket().close();
                             channel.close();
@@ -398,11 +403,11 @@ public class ServerHTTPService implements IService, Runnable {
          * @param key 发来请求的SelectionKey
          */
         void update(SelectionKey key) {
-            String address = bytesToIP(((SocketChannel) key.channel()).socket().getInetAddress().getAddress());
+            String address = ((SocketChannel) key.channel()).socket().getRemoteSocketAddress().toString();
             long current;
             for (SelectionKey k : lastConn.keySet()) {
                 //通过IP来比对，不是很严谨
-                String aliveAddress = bytesToIP(((SocketChannel) key.channel()).socket().getInetAddress().getAddress());
+                String aliveAddress = ((SocketChannel) key.channel()).socket().getRemoteSocketAddress().toString();
                 if (aliveAddress.equals(address)) {
                     current = System.currentTimeMillis();
                     lastConn.replace(k, current);
@@ -413,14 +418,6 @@ public class ServerHTTPService implements IService, Runnable {
             current = System.currentTimeMillis();
             lastConn.put(key, current);
             log("Connection with " + address + " create at " + current);
-        }
-
-        private String bytesToIP(byte[] bytes) {
-            List<String> byteStrings = new ArrayList<>(4);
-            for (byte b : bytes) {
-                byteStrings.add(String.valueOf(Byte.toUnsignedInt(b)));
-            }
-            return String.join(".", byteStrings);
         }
     }
 }

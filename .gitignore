@@ -2,5 +2,5 @@
 target/
 *.zip
 *.iml
-src/main/resources/public
+dustbin/*.*
 
