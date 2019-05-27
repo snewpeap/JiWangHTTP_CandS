@@ -1,6 +1,5 @@
 package client.service.http;
 
-import client.service.IService;
 import http.message.HTTPMessage;
 import http.method.HTTPMethod;
 
@@ -26,21 +25,24 @@ import java.util.concurrent.ConcurrentHashMap;
  * |-- interact：通过交互式的输入方式发送HTTP请求，可以指定host(主机),port(端口),method(方法),resource(资源路径)
  * o
  */
-public class HTTPService implements IService {
+public class HTTPService {
+    //标志服务是否处于运行状态
+    private static boolean isActive;
+
     //用于在命令行中展示消息时的前缀
     private static final String prefix = "Http";
 
     //用于解析命令的Map
     private static final Map<String, CommandHandler> handlerMap = new HashMap<>();
 
-    //标志服务是否处于运行状态
-    private static boolean isActive;
-
     //用于保存连接SocketChannel的Map，复用open过的SocketChannel
     private static Map<String, SocketChannel> httpMap;
 
     //用于保存接收到301响应后的跳转
     private static Map<String, String> redirectMap;
+
+    //用于保存文件的Last-Modified信息
+    private static Map<String, String> lastModifiedMap;
 
     //维护一个HTTP服务对象，以实现单例
     private static HTTPService httpService;
@@ -97,6 +99,7 @@ public class HTTPService implements IService {
         isActive = true;
         httpMap = new ConcurrentHashMap<>();
         redirectMap = new ConcurrentHashMap<>();
+        lastModifiedMap = new ConcurrentHashMap<>();
         notify("HTTP service is successfully initialized.");
     }
 
@@ -353,7 +356,12 @@ public class HTTPService implements IService {
             //构建请求报文
             RequestMessage req = new RequestMessage(method, resource);
             req.setProperty("Host", host);
-            req.setProperty("Content-Type", content_type);
+            if (method == HTTPMethod.POST) {
+                req.setProperty("Content-Type", content_type);
+            }
+            if (lastModifiedMap.containsKey(resource)) {
+                req.setProperty("If-Modified-Since", lastModifiedMap.get(resource));
+            }
             req.setContent(content);
 
             //建立与Http服务器的通信
@@ -423,14 +431,19 @@ public class HTTPService implements IService {
             HTTPService.notify("Response from Http Server\n<<<<<<<<<<<<<<<<<<<<");
             System.out.println(res + "\n<<<<<<<<<<<<<<<<<<<<");
 
+            final String CRLF = HTTPMessage.getCRLF();
             //对响应切片
-            List<String> partitions = new ArrayList<>(Arrays.asList(res.split(HTTPMessage.getCRLF())));
-            List<String> statLineParts = new ArrayList<>(Arrays.asList(partitions.get(0).split(" ")));
+            List<String> headerFields = new ArrayList<>(Arrays.asList(res.substring(0, res.indexOf(CRLF + CRLF)).split(CRLF)));
+            List<String> statLineParts = new ArrayList<>(Arrays.asList(headerFields.get(0).split(" ")));
+            headerFields.remove(0);
+
             int statusCode = Integer.parseInt(statLineParts.get(1));
+            //String content = res.substring(res.indexOf(CRLF + CRLF) + CRLF.length() * 2);
             String location = "";
             switch (statusCode) {
-                case 301://301重定向
-                    for (String field : partitions) {
+                case 301:
+                    //301重定向
+                    for (String field : headerFields) {
                         if (field.startsWith("Location:")) {
                             location = field.split("http://")[1].trim();
                             redirectMap.put(host + ":" + port + resource, getResource(location));
@@ -444,8 +457,9 @@ public class HTTPService implements IService {
                             getResource(location)
                     ).handleRequest();
                     break;
-                case 302://302需要跳转
-                    for (String field : partitions) {
+                case 302:
+                    //302需要跳转
+                    for (String field : headerFields) {
                         if (field.startsWith("Location:")) {
                             location = field.split("http://")[1].trim();
                             break;
@@ -458,11 +472,16 @@ public class HTTPService implements IService {
                             getResource(location)
                     ).handleRequest();
                     break;
-                case 304://304服务端资源未修改，从缓存读取
+                case 304:
+                    //304服务端资源未修改，从缓存读取
                     HTTPService.notify("Read resource from cache");
                     break;
-                default://200、404、500，直接打印
+                case 200:
+                    String last_modified = getFiled(headerFields, "last-modified");
+                    lastModifiedMap.put(resource, last_modified);
                     break;
+                default:
+                    //404、500，直接打印
             }
         }
 
@@ -484,6 +503,17 @@ public class HTTPService implements IService {
 
         private String getResource(String location) {
             return location.substring(location.indexOf('/'));
+        }
+
+        private String getFiled(List<String> headerFields, String key) {
+            String field = "";
+            for (String s : headerFields) {
+                if (s.toLowerCase().startsWith(key.toLowerCase())) {
+                    field = s.substring(s.indexOf(':')+1);
+                    break;
+                }
+            }
+            return field;
         }
     }
 }

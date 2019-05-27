@@ -5,11 +5,17 @@ import http.message.HTTPMessage;
 public class ResponseMessage extends HTTPMessage {
     private ResponseStatus response_status;
 
-    private ResponseMessage() {
+    static {
+        set_property_split_ignore_case.add("Last-Modified".toLowerCase());
+        set_property_split_ignore_case.add("ETag".toLowerCase());
     }
 
-    public ResponseMessage(int status_code) {
+    private ResponseMessage() {
         super();
+    }
+
+    ResponseMessage(int status_code) {
+        this();
         this.response_status = ResponseStatus.getStatusByCode(status_code);
     }
 

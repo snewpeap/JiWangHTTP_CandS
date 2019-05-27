@@ -5,11 +5,10 @@ import java.util.*;
 public abstract class HTTPMessage {
     protected static final String HTTP_VERSION = "HTTP/1.1";
     protected static final String CRLF = "\r\n";
-    private static final List<String> set_property_split_ignore_case = new ArrayList<>();
+    protected static List<String> set_property_split_ignore_case = new ArrayList<>();
 
     static {
         set_property_split_ignore_case.add("Date".toLowerCase());
-        set_property_split_ignore_case.add("Last-Modified".toLowerCase());
     }
 
     private Map<String, List<String>> header;
@@ -83,12 +82,9 @@ public abstract class HTTPMessage {
             vl = new ArrayList<>(1);
             vl.add(values);
         } else {
-            vl = Arrays.asList(values.split(",|[ ]"));
+            vl = new ArrayList<>(Arrays.asList(values.split(",|[ ]")));
             vl.removeIf(
-                    value -> {
-                        String s = value;
-                        return s.trim().isEmpty();
-                    }
+                    value -> value.trim().isEmpty()
             );
         }
         setProperty(key, vl);
@@ -111,10 +107,7 @@ public abstract class HTTPMessage {
             System.out.println(NOTHING_SET_MESSAGE);
         } else {
             values.removeIf(
-                    value -> {
-                        String s = value;
-                        return s.trim().isEmpty();
-                    } //去除LMS
+                    value -> value.trim().isEmpty()//去除LMS
             );
             if (values.isEmpty()) {
                 System.out.println(NOTHING_SET_MESSAGE);

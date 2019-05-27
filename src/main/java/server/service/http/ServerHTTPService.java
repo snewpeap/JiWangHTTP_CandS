@@ -17,6 +17,7 @@ import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -174,7 +175,6 @@ public class ServerHTTPService implements IService, Runnable {
             return res.toString();
         }
         if (reqMethod == HTTPMethod.POST) {
-            //TODO: 处理POST方法
             try {
                 Path resourcePath = Paths.get(url.toURI());
                 if (!Files.exists(resourcePath)) {
@@ -182,12 +182,7 @@ public class ServerHTTPService implements IService, Runnable {
                 } else if (!Files.isDirectory(resourcePath)) {
                     res = new ResponseMessage(405);
                 } else {
-                    String content_type = "";
-                    for (String field : headerFields) {
-                        if (field.toLowerCase().startsWith("content-type")) {
-                            content_type = field.split("[:]")[1];
-                        }
-                    }
+                    String content_type = getFiled(headerFields, "content-type");
                     try {
                         putFile(content_type, content.getBytes(), resource);
                     } catch (Exception e) {
@@ -214,15 +209,42 @@ public class ServerHTTPService implements IService, Runnable {
                         res = new ResponseMessage(404);
                     }
                 } else {
-                    res.setProperty(
-                            "Content-Type",
-                            Files.probeContentType(resourcePath)
-                    );
+                    boolean needContent = true;
+                    Date last_modified = new Date(Files.getLastModifiedTime(resourcePath).toMillis());
+                    String if_modified_since = getFiled(headerFields, "if-modified-since");
+                    if (!if_modified_since.isEmpty()) {
+                        Date since;
+                        try {
+                            since = sdf.parse(if_modified_since);
+                        }catch (ParseException pe){
+                            pe.printStackTrace();
+                            since = new Date();
+                        }
+                        if (since.before(last_modified)){
+                            res = new ResponseMessage(304);
+                            needContent = false;
+                        }
+                    }
                     res.setProperty(
                             "Last-Modified",
-                            sdf.format(new Date(Files.getLastModifiedTime(resourcePath).toMillis()))//资源最后一次修改时间
+                            sdf.format(last_modified)//资源最后一次修改时间
                     );
-                    res.setContent(Files.readAllBytes(resourcePath));
+                    res.setProperty(
+                            "ETag",
+                            sdf.format(last_modified)//用资源最后一次修改时间充当ETag
+                    );
+                    if (needContent) {
+                        res.setProperty(
+                                "Content-Type",
+                                Files.probeContentType(resourcePath)
+                        );
+                        res.setContent(
+                                Files.probeContentType(resourcePath).toLowerCase().startsWith("image")?
+                                        Base64.getMimeEncoder().encode(Files.readAllBytes(resourcePath))
+                                        :
+                                        Files.readAllBytes(resourcePath)
+                        );
+                    }
                 }
             } catch (URISyntaxException use) {
                 res = new ResponseMessage(404);
@@ -270,6 +292,17 @@ public class ServerHTTPService implements IService, Runnable {
             Files.createFile(file);
         }
         log("Generate file at " + Files.write(file, content).toString());
+    }
+
+    private String getFiled(List<String> headerFields, String key) {
+        String field = "";
+        for (String s : headerFields) {
+            if (s.toLowerCase().startsWith(key.toLowerCase())) {
+                field = s.substring(s.indexOf(':')+1);
+                break;
+            }
+        }
+        return field;
     }
 
     @Override
@@ -378,7 +411,7 @@ public class ServerHTTPService implements IService, Runnable {
                             key.cancel();
                             channel.socket().close();
                             channel.close();
-                        } catch (IOException e) {
+                        } catch (Exception e) {
                             e.printStackTrace();
                         } finally {
                             iterator.remove();

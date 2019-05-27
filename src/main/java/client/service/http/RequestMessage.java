@@ -7,12 +7,16 @@ public class RequestMessage extends HTTPMessage {
     private HTTPMethod method;
     private String resource;
 
-    private RequestMessage() {
-
+    static {
+        set_property_split_ignore_case.add("If-Modified-Since".toLowerCase());
     }
 
-    public RequestMessage(HTTPMethod method, String resource) {
+    private RequestMessage() {
         super();
+    }
+
+    RequestMessage(HTTPMethod method, String resource) {
+        this();
         this.method = method;
         this.resource = resource;
     }
