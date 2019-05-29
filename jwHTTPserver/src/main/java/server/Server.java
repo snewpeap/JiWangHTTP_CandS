@@ -12,11 +12,7 @@ import java.util.List;
  * HTTP服务器的启动类
  */
 public class Server {
-    List<IService> services;
-
-    public Server() {
-        System.out.println("Server : Server Starting with out any service...");
-    }
+    private List<IService> services;
 
     /**
      * Server初始化时，注入需要服务列表，类似于开机启动的应用
@@ -39,13 +35,12 @@ public class Server {
      */
     private void run() {
         for (IService service : services) {
-            System.out.println("Server : Initializing " + service.toString() + "...");
             try {
                 service.init();
+                new Thread((Runnable) service).start();
             } catch (IOException e) {
                 System.out.println("Server : Service" + service.toString() + " failed to start.");
             }
-            new Thread((Runnable) service).start();
         }
         System.out.println("Server : Server is running.");
     }

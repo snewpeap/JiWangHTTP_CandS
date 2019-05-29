@@ -7,14 +7,14 @@ import java.net.Socket;
 
 @Deprecated
 public class IOServer {
-    public static void main(String[] args) {
+    /*public static void main(String[] args) {
         IOServer ioServer = new IOServer();
         try {
             ioServer.run();
         } catch (IOException e){
             e.printStackTrace();
         }
-    }
+    }*/
 
     public void run() throws IOException{
         ServerSocket serverSocket = new ServerSocket(8088);

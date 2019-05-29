@@ -1,6 +1,6 @@
 package client;
 
-import client.service.http.HTTPService;
+import client.http.HTTPService;
 
 /**
  * Class Client
@@ -14,11 +14,11 @@ public class Client {
 
     public static void main(String[] args) {
         httpService = HTTPService.getInstance();
-        httpService.init();
         try {
+            httpService.init();
             httpService.run();
         } catch (Exception e) {
-            System.err.println(e.getMessage());
+            System.out.println("Client");
         }
     }
 

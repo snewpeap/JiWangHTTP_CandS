@@ -1,7 +1,8 @@
-package client.service.http;
+package client.http;
 
 import http.message.HTTPMessage;
 import http.method.HTTPMethod;
+import http.mime.MimeType;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -47,6 +48,9 @@ public class HTTPService {
     //维护一个HTTP服务对象，以实现单例
     private static HTTPService httpService;
 
+    //存放接收到的资源的文件夹
+    private static Path receiveContentDir;
+
     static {
         handlerMap.put("send", Send_Handler.getInstance());
     }
@@ -85,31 +89,45 @@ public class HTTPService {
      * @param s 输出的错误消息
      */
     private static void err(String s) {
-        System.err.println(prefix + " : " + s);
+        synchronized (System.out) {
+            System.err.println(prefix + " : " + s);
+        }
     }
 
     /**
      * 无参的初始化方法
      */
-    public synchronized void init() {
-        if (isActive) {
-            notify("HTTP service has already been initialized.");
-            return;
+    public synchronized void init() throws Exception {
+        try {
+            if (isActive) {
+                notify("HTTP service has already been initialized.");
+                return;
+            }
+            isActive = true;
+            httpMap = new ConcurrentHashMap<>();
+            redirectMap = new ConcurrentHashMap<>();
+            lastModifiedMap = new ConcurrentHashMap<>();
+            receiveContentDir = Paths.get(System.getProperty("user.dir") + "\\receive");
+            if (!Files.exists(receiveContentDir)) {
+                Files.createDirectory(receiveContentDir);
+            }
+            notify("Set receive directory to " + receiveContentDir.toString());
+            notify("HTTP service is successfully initialized.");
+        } catch (Exception e) {
+            err("HTTP service failed to initialize.");
+            e.printStackTrace();
+            throw e;
         }
-        isActive = true;
-        httpMap = new ConcurrentHashMap<>();
-        redirectMap = new ConcurrentHashMap<>();
-        lastModifiedMap = new ConcurrentHashMap<>();
-        notify("HTTP service is successfully initialized.");
     }
 
     /**
      * 无参的运行方法，在该方法内接受用户的指令，并调用对应的CommandHandler来处理指令
-     *
-     * @throws Exception 服务未初始化
      */
-    public void run() throws Exception {
-        if (!isActive) throw new Exception("Service Not Yet initialized.");
+    public void run() {
+        if (!isActive) {
+            err("Service Not Yet initialized.");
+            return;
+        }
         notify("HTTP service is running.");
 
         //接受用户输入
@@ -264,7 +282,7 @@ public class HTTPService {
                         case 1:
                             System.out.print("Text : ");
                             ch.content = sc.nextLine().getBytes(StandardCharsets.UTF_8);
-                            ch.content_type = "text/plain";
+                            ch.content_type = MimeType.TEXT_PLAIN.getTypeString();
                             break;
                         case 2:
                             String filePath;
@@ -319,7 +337,7 @@ public class HTTPService {
         int port = 8089;
         HTTPMethod method = HTTPMethod.GET;
         String resource = "/";
-        String content_type = "text";
+        String content_type = MimeType.TEXT_PLAIN.getTypeString();
         byte[] content = null;
 
         ConnectionHolder() {
@@ -432,14 +450,15 @@ public class HTTPService {
             System.out.println(res + "\n<<<<<<<<<<<<<<<<<<<<");
 
             final String CRLF = HTTPMessage.getCRLF();
-            //对响应切片
+            //对响应切片，获得响应头
             List<String> headerFields = new ArrayList<>(Arrays.asList(res.substring(0, res.indexOf(CRLF + CRLF)).split(CRLF)));
+            //获得状态行
             List<String> statLineParts = new ArrayList<>(Arrays.asList(headerFields.get(0).split(" ")));
             headerFields.remove(0);
 
             int statusCode = Integer.parseInt(statLineParts.get(1));
-            //String content = res.substring(res.indexOf(CRLF + CRLF) + CRLF.length() * 2);
-            String location = "";
+            String content = res.substring(res.indexOf(CRLF + CRLF) + CRLF.length() * 2);
+            String location = "";//重定向url
             switch (statusCode) {
                 case 301:
                     //301重定向
@@ -477,6 +496,11 @@ public class HTTPService {
                     HTTPService.notify("Read resource from cache");
                     break;
                 case 200:
+                    //200:OK,如果有资源需要保存资源，记录资源的最后修改时间
+                    String content_type = getFiled(headerFields, "content-type");
+                    String fileName = resource.substring(resource.lastIndexOf('/') + 1);
+                    putFile(content_type, fileName, content.getBytes());
+
                     String last_modified = getFiled(headerFields, "last-modified");
                     lastModifiedMap.put(resource, last_modified);
                     break;
@@ -509,11 +533,24 @@ public class HTTPService {
             String field = "";
             for (String s : headerFields) {
                 if (s.toLowerCase().startsWith(key.toLowerCase())) {
-                    field = s.substring(s.indexOf(':')+1);
+                    field = s.substring(s.indexOf(':') + 1);
                     break;
                 }
             }
             return field;
+        }
+
+        private void putFile(String content_type, String name, byte[] content) throws Exception {
+            if (!content_type.startsWith("text")) {
+                //只有mime类型为text/*的资源不需要Base64编解码
+                content = Base64.getMimeDecoder().decode(content);
+            }
+            Path file = receiveContentDir
+                    .resolve(name + '.' + MimeType.getPostfix(content_type));
+            if (!Files.exists(file)) {
+                Files.createFile(file);
+            }
+            Files.write(file, content);
         }
     }
 }

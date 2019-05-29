@@ -1,4 +1,4 @@
-package client.service.http;
+package client.http;
 
 import http.message.HTTPMessage;
 import http.method.HTTPMethod;

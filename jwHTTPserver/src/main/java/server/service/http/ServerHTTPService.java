@@ -7,6 +7,7 @@ import server.service.IService;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.ByteBuffer;
@@ -14,9 +15,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.file.*;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -41,6 +40,9 @@ public class ServerHTTPService implements IService, Runnable {
     //长连接管理者对象
     private Keeper keeper;
 
+    //接收的文件放置的文件夹
+    private Path receiveContentDir;
+
     public ServerHTTPService(int port) {
         this.port = port;
     }
@@ -52,6 +54,10 @@ public class ServerHTTPService implements IService, Runnable {
      */
     public void init() throws IOException {
         log("Starting HTTP service...");
+        if (isActive) {
+            log("HTTP service has already been initialized.");
+            return;
+        }
         try {
             listenerSelector = Selector.open();
             handlerSelector = Selector.open();
@@ -61,8 +67,13 @@ public class ServerHTTPService implements IService, Runnable {
             log(String.format("HTTP service listen on port %d.", port));
             httpChannel.configureBlocking(false);
             httpChannel.register(listenerSelector, SelectionKey.OP_ACCEPT);
-            log("HTTP service start successfully.");
+            receiveContentDir = Paths.get(System.getProperty("user.dir") + "\\receive");
+            if (!Files.exists(receiveContentDir)) {
+                Files.createDirectory(receiveContentDir);
+            }
+            log("Set receive directory to " + receiveContentDir.toString());
             isActive = true;
+            log("HTTP service start successfully.");
         } catch (IOException e) {
             err("Failed to start HTTP service.");
             e.printStackTrace();
@@ -89,11 +100,13 @@ public class ServerHTTPService implements IService, Runnable {
      * @param s 错误记录
      */
     private void err(String s) {
-        System.err.println(
-                '[' + this.toString() + " - "
-                        + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date()) + "] "
-                        + s
-        );
+        synchronized (System.out) {
+            System.err.println(
+                    '[' + this.toString() + " - "
+                            + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date()) + "] "
+                            + s
+            );
+        }
     }
 
     /**
@@ -101,6 +114,10 @@ public class ServerHTTPService implements IService, Runnable {
      */
     @Override
     public void run() {
+        if (!isActive) {
+            err("Service Not Yet initialized.");
+            return;
+        }
         new Thread(new Listener()).start();
         new Thread(new Handler()).start();
         new Thread(keeper).start();
@@ -182,7 +199,7 @@ public class ServerHTTPService implements IService, Runnable {
                 } else if (!Files.isDirectory(resourcePath)) {
                     res = new ResponseMessage(405);
                 } else {
-                    String content_type = getFiled(headerFields, "content-type");
+                    String content_type = getField(headerFields, "content-type");
                     try {
                         putFile(content_type, content.getBytes(), resource);
                     } catch (Exception e) {
@@ -195,11 +212,11 @@ public class ServerHTTPService implements IService, Runnable {
             }
         } else {
             try {
-                Path resourcePath = Paths.get(url.toURI());
+                Path resourcePath = getPath(url.toURI());
                 if (!Files.exists(resourcePath)) {
                     res = new ResponseMessage(404);
                 } else if (Files.isDirectory(resourcePath)) {
-                    if (resourcePath.equals(Paths.get(this.getClass().getResource("/public").toURI()))) {
+                    if (resourcePath.equals(getPath(this.getClass().getResource("/public/").toURI()))) {
                         res = new ResponseMessage(301);
                         res.setProperty(
                                 "Location",
@@ -211,16 +228,17 @@ public class ServerHTTPService implements IService, Runnable {
                 } else {
                     boolean needContent = true;
                     Date last_modified = new Date(Files.getLastModifiedTime(resourcePath).toMillis());
-                    String if_modified_since = getFiled(headerFields, "if-modified-since");
+                    String if_modified_since = getField(headerFields, "if-modified-since");
                     if (!if_modified_since.isEmpty()) {
                         Date since;
                         try {
                             since = sdf.parse(if_modified_since);
-                        }catch (ParseException pe){
+                        } catch (ParseException pe) {
                             pe.printStackTrace();
                             since = new Date();
                         }
-                        if (since.before(last_modified)){
+                        if (since.compareTo(last_modified) >= 0 // since.compareTo(last_modified)返回值≥0,since等于或晚于last_modified,说明资源的最晚修改时间早于since
+                                || Math.abs(since.getTime() - last_modified.getTime()) < 1000) {// 而因为传来的since无法精确到毫秒，因此相差一秒以内则视为最晚修改时间早于since
                             res = new ResponseMessage(304);
                             needContent = false;
                         }
@@ -239,7 +257,7 @@ public class ServerHTTPService implements IService, Runnable {
                                 Files.probeContentType(resourcePath)
                         );
                         res.setContent(
-                                Files.probeContentType(resourcePath).toLowerCase().startsWith("image")?
+                                Files.probeContentType(resourcePath).toLowerCase().startsWith("image") ?
                                         Base64.getMimeEncoder().encode(Files.readAllBytes(resourcePath))
                                         :
                                         Files.readAllBytes(resourcePath)
@@ -275,34 +293,50 @@ public class ServerHTTPService implements IService, Runnable {
         }
     }
 
-    private void putFile(String content_type, byte[] content, String dir) throws Exception {
-        if (dir.equals("/") || dir.equals("\\")) {
-            dir = "";
+    private void putFile(String content_type, byte[] content, String subDir) throws Exception {
+        if (subDir.equals("/") || subDir.equals("\\")) {
+            subDir = "";
         }
         if (!content_type.startsWith("text")) {
+            //只有mime类型为text/*的资源不需要Base64编解码
             content = Base64.getMimeDecoder().decode(content);
         }
-        Path file = Paths.get(
-                System.getProperty("user.dir"),
-                "dustbin",
-                dir,
-                System.currentTimeMillis() + "." + MimeType.getPostfix(content_type)
-        );
+        Path file = receiveContentDir
+                .resolve(subDir)
+                .resolve(System.currentTimeMillis() + '.' + MimeType.getPostfix(content_type));//接收到的资源以接收时的毫秒数命名
         if (!Files.exists(file)) {
             Files.createFile(file);
         }
         log("Generate file at " + Files.write(file, content).toString());
     }
 
-    private String getFiled(List<String> headerFields, String key) {
+    private String getField(List<String> headerFields, String key) {
         String field = "";
         for (String s : headerFields) {
             if (s.toLowerCase().startsWith(key.toLowerCase())) {
-                field = s.substring(s.indexOf(':')+1);
+                field = s.substring(s.indexOf(':') + 1);
                 break;
             }
         }
         return field;
+    }
+
+    private Path getPath(URI uri) throws IOException {
+        if (uri.getScheme().equals("jar")) {
+            final Map<String, String> env = new HashMap<>();
+            final String[] array = uri.toString().split("[!]");
+            final FileSystem fs;
+            FileSystem temp;
+            try {
+                temp = FileSystems.newFileSystem(URI.create(array[0]), env);
+            } catch (FileSystemAlreadyExistsException e) {
+                temp = FileSystems.getFileSystem(URI.create(array[0]));
+            }
+            fs = temp;
+            return fs.getPath(array[1]);
+        } else {
+            return Paths.get(uri);
+        }
     }
 
     @Override
@@ -439,8 +473,9 @@ public class ServerHTTPService implements IService, Runnable {
             String address = ((SocketChannel) key.channel()).socket().getRemoteSocketAddress().toString();
             long current;
             for (SelectionKey k : lastConn.keySet()) {
-                //通过IP来比对，不是很严谨
                 String aliveAddress = ((SocketChannel) key.channel()).socket().getRemoteSocketAddress().toString();
+                // getRemoteSocketAddress().toString()获得远程主机的IP和port连接的字符串，如127.0.0.1:60000
+
                 if (aliveAddress.equals(address)) {
                     current = System.currentTimeMillis();
                     lastConn.replace(k, current);
@@ -448,9 +483,11 @@ public class ServerHTTPService implements IService, Runnable {
                     return;
                 }
             }
+
+            // 此连接是新来的连接，则新增一条记录
             current = System.currentTimeMillis();
             lastConn.put(key, current);
-            log("Connection with " + address + " create at " + current);
+            log("Connection with " + address + " establish at " + current);
         }
     }
 }
