@@ -3,7 +3,7 @@ package client.http;
 import http.message.HTTPMessage;
 import http.method.HTTPMethod;
 
-public class RequestMessage extends HTTPMessage {
+class RequestMessage extends HTTPMessage {
     private HTTPMethod method;
     private String resource;
 

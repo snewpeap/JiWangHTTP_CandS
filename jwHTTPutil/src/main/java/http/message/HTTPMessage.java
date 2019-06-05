@@ -14,7 +14,7 @@ public abstract class HTTPMessage {
     private Map<String, List<String>> header;
     private byte[] content;
 
-    public HTTPMessage() {
+    protected HTTPMessage() {
         this.header = new HashMap<>();
         this.content = null;
     }
@@ -42,9 +42,7 @@ public abstract class HTTPMessage {
      * @return 构建好报文头的StringBuilder
      */
     protected StringBuilder buildHeader(StringBuilder stringBuilder) {
-        Iterator<Map.Entry<String, List<String>>> iterator = header.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<String, List<String>> field = iterator.next();
+        for (Map.Entry<String, List<String>> field : header.entrySet()) {
             stringBuilder
                     .append(field.getKey()).append(":")
                     .append(String.join(",", field.getValue()))

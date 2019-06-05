@@ -6,7 +6,7 @@ import client.http.HTTPService;
  * Class Client
  * HTTP客户端的启动类
  */
-public class Client {
+class Client {
     /**
      * 一个客户端只会启动一个http服务，运行在一个端口上
      */

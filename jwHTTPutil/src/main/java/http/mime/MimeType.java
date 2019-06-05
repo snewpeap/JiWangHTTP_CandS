@@ -6,8 +6,8 @@ public enum MimeType {
     TEXT_PLAIN("text/plain", "txt"),
     TEXT_HTML("text/html", "html");
 
-    private String typeString;
-    private String postfix;
+    private final String typeString;
+    private final String postfix;
 
     MimeType(String typeString, String postfix) {
         this.typeString = typeString;

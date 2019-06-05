@@ -201,7 +201,8 @@ public class ServerHTTPService implements IService, Runnable {
                 } else {
                     String content_type = getField(headerFields, "content-type");
                     try {
-                        putFile(content_type, content.getBytes(), resource);
+                        String filename = putFile(content_type, content.getBytes(), resource);
+                        res.setProperty("content-location", resource + filename);
                     } catch (Exception e) {
                         e.printStackTrace();
                         res = new ResponseMessage(500);
@@ -232,7 +233,7 @@ public class ServerHTTPService implements IService, Runnable {
                     if (!if_modified_since.isEmpty()) {
                         Date since;
                         try {
-                            since = sdf.parse(if_modified_since);
+                            since = sdf.parse(if_modified_since.trim());
                         } catch (ParseException pe) {
                             pe.printStackTrace();
                             since = new Date();
@@ -268,6 +269,8 @@ public class ServerHTTPService implements IService, Runnable {
                 res = new ResponseMessage(404);
             } catch (IOException ioe) {
                 res = new ResponseMessage(500);
+            } catch (Exception e) {
+                e.printStackTrace();
             }
         }
         res.setProperty(
@@ -293,7 +296,7 @@ public class ServerHTTPService implements IService, Runnable {
         }
     }
 
-    private void putFile(String content_type, byte[] content, String subDir) throws Exception {
+    private String putFile(String content_type, byte[] content, String subDir) throws Exception {
         if (subDir.equals("/") || subDir.equals("\\")) {
             subDir = "";
         }
@@ -301,13 +304,15 @@ public class ServerHTTPService implements IService, Runnable {
             //只有mime类型为text/*的资源不需要Base64编解码
             content = Base64.getMimeDecoder().decode(content);
         }
+        String filename = System.currentTimeMillis() + "." + MimeType.getPostfix(content_type);
         Path file = receiveContentDir
                 .resolve(subDir)
-                .resolve(System.currentTimeMillis() + '.' + MimeType.getPostfix(content_type));//接收到的资源以接收时的毫秒数命名
+                .resolve(filename);//接收到的资源以接收时的毫秒数命名
         if (!Files.exists(file)) {
             Files.createFile(file);
         }
         log("Generate file at " + Files.write(file, content).toString());
+        return filename;
     }
 
     private String getField(List<String> headerFields, String key) {
@@ -354,7 +359,6 @@ public class ServerHTTPService implements IService, Runnable {
             while (isActive) {
                 try {
                     if (listenerSelector.select(1) > 0) {
-                        log("Comes a connection.");
                         Iterator<SelectionKey> selectionKeyIterator = listenerSelector.selectedKeys().iterator();
 
                         while (selectionKeyIterator.hasNext()) {

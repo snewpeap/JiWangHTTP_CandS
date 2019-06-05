@@ -11,7 +11,7 @@ import java.util.List;
  * Class Server
  * HTTP服务器的启动类
  */
-public class Server {
+class Server {
     private List<IService> services;
 
     /**

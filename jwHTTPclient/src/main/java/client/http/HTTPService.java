@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * 客户端的HTTP服务类，负责收发HTTP消息，处理接收到的HTTP消息中的内容，消息均以字符串的方式发送和接收
@@ -51,8 +52,11 @@ public class HTTPService {
     //存放接收到的资源的文件夹
     private static Path receiveContentDir;
 
+    private static Map<Date, String> histories;
+
     static {
         handlerMap.put("send", Send_Handler.getInstance());
+        handlerMap.put("history", History_Handler.getInstance());
     }
 
     private HTTPService() {
@@ -107,6 +111,7 @@ public class HTTPService {
             httpMap = new ConcurrentHashMap<>();
             redirectMap = new ConcurrentHashMap<>();
             lastModifiedMap = new ConcurrentHashMap<>();
+            histories = new ConcurrentHashMap<>();
             receiveContentDir = Paths.get(System.getProperty("user.dir") + "\\receive");
             if (!Files.exists(receiveContentDir)) {
                 Files.createDirectory(receiveContentDir);
@@ -210,8 +215,12 @@ public class HTTPService {
 
             if (argsList.contains("direct")) {
                 String rawURL;
+                String urlMatcher = "^(http://)?(([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})|([^\\s:/]+))(:[0-9]{1,5})?/.*$";
                 if ((rawURL = sc.nextLine().trim()).isEmpty()) { //输入为空，什么也不做
                     return;
+                }
+                if (!Pattern.compile(urlMatcher).matcher(rawURL.toLowerCase()).matches()) {
+                    err("不合法的URL");
                 }
                 if (!rawURL.toLowerCase().startsWith("http://")) { //补全http://到url的头部
                     rawURL = "http://" + rawURL;
@@ -327,6 +336,32 @@ public class HTTPService {
         }
     }
 
+    private static class History_Handler implements CommandHandler {
+        private static History_Handler instance;
+
+        private History_Handler() {
+        }
+
+        static History_Handler getInstance() {
+            if (instance == null) {
+                instance = new History_Handler();
+            }
+            return instance;
+        }
+
+        @Override
+        public void execute(String[] args) {
+            int order = 1;
+            for (Map.Entry<Date, String> record : histories.entrySet()) {
+                System.out.println(order++ + ". " + record.getKey().toString() + " - " + record.getValue());
+            }
+        }
+
+        void addHistory(String url) {
+            histories.put(new Date(), url);
+        }
+    }
+
     /**
      * Inner Class ConnectionHolder
      * 实际管理连接服务器、请求和响应的内部类
@@ -334,7 +369,7 @@ public class HTTPService {
      */
     private static class ConnectionHolder {
         String host = "127.0.0.1";
-        int port = 8089;
+        int port = 80;
         HTTPMethod method = HTTPMethod.GET;
         String resource = "/";
         String content_type = MimeType.TEXT_PLAIN.getTypeString();
@@ -348,6 +383,10 @@ public class HTTPService {
             this.port = port;
             this.method = method;
             this.resource = resource;
+        }
+
+        private String url() {
+            return host + ':' + port + resource;
         }
 
         /**
@@ -377,8 +416,8 @@ public class HTTPService {
             if (method == HTTPMethod.POST) {
                 req.setProperty("Content-Type", content_type);
             }
-            if (lastModifiedMap.containsKey(resource)) {
-                req.setProperty("If-Modified-Since", lastModifiedMap.get(resource));
+            if (lastModifiedMap.containsKey(url())) {
+                req.setProperty("If-Modified-Since", lastModifiedMap.get(url()));
             }
             req.setContent(content);
 
@@ -445,7 +484,6 @@ public class HTTPService {
          * @throws Exception 调用handleRequest方法抛出的异常
          */
         void handleResponse(String res) throws Exception {
-            //TODO: 历史记录
             HTTPService.notify("Response from Http Server\n<<<<<<<<<<<<<<<<<<<<");
             System.out.println(res + "\n<<<<<<<<<<<<<<<<<<<<");
 
@@ -496,13 +534,18 @@ public class HTTPService {
                     HTTPService.notify("Read resource from cache");
                     break;
                 case 200:
-                    //200:OK,如果有资源需要保存资源，记录资源的最后修改时间
-                    String content_type = getFiled(headerFields, "content-type");
-                    String fileName = resource.substring(resource.lastIndexOf('/') + 1);
-                    putFile(content_type, fileName, content.getBytes());
-
-                    String last_modified = getFiled(headerFields, "last-modified");
-                    lastModifiedMap.put(resource, last_modified);
+                    //200:OK
+                    if (!content.trim().isEmpty()) {
+                        // 如果有资源需要保存资源，记录资源的最后修改时间
+                        String content_type = getFiled(headerFields, "content-type");
+                        String fileName = resource.substring(resource.lastIndexOf('/') + 1);
+                        putFile(content_type, fileName, content.getBytes());
+                        String last_modified = getFiled(headerFields, "last-modified");
+                        lastModifiedMap.put(url(), last_modified);
+                    }
+                    if (method == HTTPMethod.GET) {
+                        History_Handler.getInstance().addHistory(url());
+                    }
                     break;
                 default:
                     //404、500，直接打印
@@ -546,7 +589,7 @@ public class HTTPService {
                 content = Base64.getMimeDecoder().decode(content);
             }
             Path file = receiveContentDir
-                    .resolve(name + '.' + MimeType.getPostfix(content_type));
+                    .resolve(name);
             if (!Files.exists(file)) {
                 Files.createFile(file);
             }
