@@ -19,12 +19,14 @@ import java.util.regex.Pattern;
 /**
  * 客户端的HTTP服务类，负责收发HTTP消息，处理接收到的HTTP消息中的内容，消息均以字符串的方式发送和接收
  * 服务通过命令行接受用户命令，目前已实现的命令有：
- * Send [direct|interact (default)]：发送HTTP请求
+ * |send [direct|interact (default)] : 发送HTTP请求
  * |
  * |-- direct：通过直接输入URL的方式发送HTTP请求，默认使用GET方法（直接输入URL通常也是使用GET方法）
- * |---- i.e. http://127.0.0.1:8089/index.html
+ * |---- i.e. URL: http://127.0.0.1:8089/index.html
  * |
  * |-- interact：通过交互式的输入方式发送HTTP请求，可以指定host(主机),port(端口),method(方法),resource(资源路径)
+ * |
+ * |history : 查看请求的历史记录
  * o
  */
 public class HTTPService {
@@ -52,6 +54,7 @@ public class HTTPService {
     //存放接收到的资源的文件夹
     private static Path receiveContentDir;
 
+    //存放历史记录的Map
     private static Map<Date, String> histories;
 
     static {
@@ -83,7 +86,7 @@ public class HTTPService {
     /**
      * 等待输入的前缀
      */
-    private static void waitForInput() {
+    private static void askForInput() {
         System.out.print(prefix + " > ");
     }
 
@@ -107,7 +110,6 @@ public class HTTPService {
                 notify("HTTP service has already been initialized.");
                 return;
             }
-            isActive = true;
             httpMap = new ConcurrentHashMap<>();
             redirectMap = new ConcurrentHashMap<>();
             lastModifiedMap = new ConcurrentHashMap<>();
@@ -118,6 +120,7 @@ public class HTTPService {
             }
             notify("Set receive directory to " + receiveContentDir.toString());
             notify("HTTP service is successfully initialized.");
+            isActive = true;
         } catch (Exception e) {
             err("HTTP service failed to initialize.");
             e.printStackTrace();
@@ -138,8 +141,8 @@ public class HTTPService {
         //接受用户输入
         Scanner sc = new Scanner(System.in);
         String next;
-        waitForInput();
-        while (!(next = sc.nextLine()).equalsIgnoreCase("quit")) {
+        askForInput();
+        while (!(next = sc.nextLine().toLowerCase()).equals("quit")) {
             try {
                 String[] inputs = next.split(" ");
                 handlerMap.get(inputs[0].toLowerCase())
@@ -151,7 +154,7 @@ public class HTTPService {
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
-                waitForInput();
+                askForInput();
             }
         }
 
@@ -172,7 +175,7 @@ public class HTTPService {
     }
 
     /**
-     * Inner Interface CommandHandler
+     * Inner interface CommandHandler
      * 处理指令的handler内部接口类
      * execute方法为执行指令的有参方法
      */
@@ -181,7 +184,7 @@ public class HTTPService {
     }
 
     /**
-     * Inner Class Send_Handler
+     * Inner class Send_Handler
      * 处理send指令的handler内部类
      */
     private static class Send_Handler implements CommandHandler {
@@ -210,25 +213,30 @@ public class HTTPService {
                 args = new String[]{"interact"};
             }
             List<String> argsList = new ArrayList<>(Arrays.asList(args));
-            ConnectionHolder ch = ConnectionHolder.getInstance();
             Scanner sc = new Scanner(System.in);
+
+            ConnectionHolder ch = ConnectionHolder.getInstance();
 
             if (argsList.contains("direct")) {
                 String rawURL;
                 String urlMatcher = "^(http://)?(([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})|([^\\s:/]+))(:[0-9]{1,5})?/.*$";
-                if ((rawURL = sc.nextLine().trim()).isEmpty()) { //输入为空，什么也不做
+                System.out.print("URL: ");
+                //输入为空，什么也不做
+                if ((rawURL = sc.nextLine().trim()).isEmpty()) {
                     return;
                 }
                 if (!Pattern.compile(urlMatcher).matcher(rawURL.toLowerCase()).matches()) {
                     err("不合法的URL");
                 }
-                if (!rawURL.toLowerCase().startsWith("http://")) { //补全http://到url的头部
+                //补全http://到url的头部
+                if (!rawURL.toLowerCase().startsWith("http://")) {
                     rawURL = "http://" + rawURL;
                 }
-
                 //截取出URL中指定了主机和端口的部分来解析，如127.0.0.1:8089
-                String addressWindow = rawURL.substring("http://".length(), rawURL.indexOf('/', "http://".length()));
-                if (addressWindow.contains(":")) { //含有':'说明在URL中显示指明了端口号
+                int endPosOfAddress = rawURL.indexOf('/', "http://".length());
+                String addressWindow = rawURL.substring("http://".length(), endPosOfAddress);
+                //含有':'说明在URL中显示指明了端口号
+                if (addressWindow.contains(":")) {
                     String[] ss = addressWindow.split(":");
                     try {
                         ch.host = ss[0].toLowerCase();
@@ -237,14 +245,15 @@ public class HTTPService {
                         nfe.printStackTrace();
                         return;
                     }
-                } else { //没有':'说明该字段内只含有主机地址
-                    ch.host = addressWindow.toLowerCase();
+                } else {
+                    //没有':'说明该字段内只含有主机地址
                     //端口号采用默认的端口号，在本项目中为8089，声明于ConnectionHolder中
+                    ch.host = addressWindow.toLowerCase();
                 }
-                ch.resource = rawURL.substring(rawURL.indexOf('/', "http://".length())).toLowerCase();
+                ch.resource = rawURL.substring(endPosOfAddress).toLowerCase();
             } else if (argsList.contains("interact")) {
                 String host = ch.host;//默认为"127.0.0.1"
-                String portString;//默认为8089
+                String portString;//默认为80
                 String resource = ch.resource;//默认为"/"
                 String methodString;//默认为HTTPMethod.GET
 
@@ -283,6 +292,7 @@ public class HTTPService {
                 }
 
                 if (ch.method == HTTPMethod.POST) {
+                    //支持两大种资源类型text和image，默认为text/plain
                     System.out.println("Available type:\n1. text;\n2. image");
                     System.out.print("Content-type [ " + ch.content_type + " ] : ");
                     int type_option = Integer.parseInt(sc.nextLine());
@@ -290,6 +300,7 @@ public class HTTPService {
                     switch (type_option) {
                         case 1:
                             System.out.print("Text : ");
+                            //对text类型不进行base64编码
                             ch.content = sc.nextLine().getBytes(StandardCharsets.UTF_8);
                             ch.content_type = MimeType.TEXT_PLAIN.getTypeString();
                             break;
@@ -299,19 +310,19 @@ public class HTTPService {
                             if (!(filePath = sc.nextLine()).isEmpty()) {
                                 Path file = Paths.get(filePath);
                                 if (!Files.exists(file)) {
-                                    System.out.println("No such image.");
+                                    err("No such image.");
                                     return;
                                 } else if (Files.isDirectory(file)) {
-                                    System.out.println("Directory is not allowed");
+                                    err("Directory is not allowed");
                                     return;
                                 } else {
                                     try {
-                                        String realType = Files.probeContentType(file);
-                                        if (!realType.startsWith("image")) {
-                                            System.out.println("File is not image");
+                                        ch.content_type = Files.probeContentType(file);
+                                        if (!ch.content_type.startsWith("image")) {
+                                            err("File is not image");
                                             return;
                                         }
-                                        ch.content_type = realType;
+                                        //对图片进行Base64编码
                                         ch.content = Base64.getMimeEncoder().encode(Files.readAllBytes(file));
                                     } catch (IOException ioe) {
                                         ioe.printStackTrace();
@@ -336,6 +347,10 @@ public class HTTPService {
         }
     }
 
+    /**
+     * Inner class History_Handler
+     * 负责记录和显示历史记录的内部类
+     */
     private static class History_Handler implements CommandHandler {
         private static History_Handler instance;
 
@@ -357,8 +372,8 @@ public class HTTPService {
             }
         }
 
-        void addHistory(String url) {
-            histories.put(new Date(), url);
+        void addHistory(String record) {
+            histories.put(new Date(), record);
         }
     }
 
@@ -385,6 +400,9 @@ public class HTTPService {
             this.resource = resource;
         }
 
+        /**
+         * 拼装url的工具方法
+         */
         private String url() {
             return host + ':' + port + resource;
         }
@@ -406,7 +424,7 @@ public class HTTPService {
         void handleRequest() throws Exception {
             //301重定向
             String noPrefixURL = host + ":" + port;
-            if (redirectMap.containsKey(noPrefixURL + resource)) {
+            if (redirectMap.containsKey(noPrefixURL + resource) && method == HTTPMethod.GET) {
                 resource = getResource(redirectMap.get(noPrefixURL + resource));
             }
 
@@ -465,13 +483,9 @@ public class HTTPService {
                     byteBuffer.clear();
                 } while ((count = socketChannel.read(byteBuffer)) > 0);
 
+                //处理响应
                 res = stringBuilder.toString();
                 handleResponse(res);
-
-                //关闭连接，模拟Http无连接
-                /*socketChannel.close();
-                socketChannel.socket().close();
-                HTTPService.notify("Disconnect from Http Server");*/
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -484,26 +498,27 @@ public class HTTPService {
          * @throws Exception 调用handleRequest方法抛出的异常
          */
         void handleResponse(String res) throws Exception {
-            HTTPService.notify("Response from Http Server\n<<<<<<<<<<<<<<<<<<<<");
-            System.out.println(res + "\n<<<<<<<<<<<<<<<<<<<<");
+            HTTPService.notify("Response from Http Server\n<<<<<<<<<<\n" + res + "\n<<<<<<<<<<");
 
             final String CRLF = HTTPMessage.getCRLF();
+            int endPosOfHeader = res.indexOf(CRLF + CRLF);
             //对响应切片，获得响应头
-            List<String> headerFields = new ArrayList<>(Arrays.asList(res.substring(0, res.indexOf(CRLF + CRLF)).split(CRLF)));
+            List<String> headerFields = new ArrayList<>(Arrays.asList(res.substring(0, endPosOfHeader).split(CRLF)));
             //获得状态行
             List<String> statLineParts = new ArrayList<>(Arrays.asList(headerFields.get(0).split(" ")));
             headerFields.remove(0);
 
             int statusCode = Integer.parseInt(statLineParts.get(1));
-            String content = res.substring(res.indexOf(CRLF + CRLF) + CRLF.length() * 2);
+            String content = res.substring(endPosOfHeader + CRLF.length() * 2);
             String location = "";//重定向url
             switch (statusCode) {
                 case 301:
                     //301重定向
                     for (String field : headerFields) {
-                        if (field.startsWith("Location:")) {
+                        if (field.toLowerCase().startsWith("location:")) {
                             location = field.split("http://")[1].trim();
-                            redirectMap.put(host + ":" + port + resource, getResource(location));
+                            //把响应含301状态码的记录进跳转地图里
+                            redirectMap.put(url(), getResource(location));
                             break;
                         }
                     }
@@ -531,7 +546,7 @@ public class HTTPService {
                     break;
                 case 304:
                     //304服务端资源未修改，从缓存读取
-                    HTTPService.notify("Read resource from cache");
+                    HTTPService.notify("Please read resource from cache");
                     break;
                 case 200:
                     //200:OK
@@ -543,9 +558,8 @@ public class HTTPService {
                         String last_modified = getFiled(headerFields, "last-modified");
                         lastModifiedMap.put(url(), last_modified);
                     }
-                    if (method == HTTPMethod.GET) {
-                        History_Handler.getInstance().addHistory(url());
-                    }
+                    //记录历史记录
+                    History_Handler.getInstance().addHistory(method.getMethodName().toUpperCase() + ' ' + url());
                     break;
                 default:
                     //404、500，直接打印

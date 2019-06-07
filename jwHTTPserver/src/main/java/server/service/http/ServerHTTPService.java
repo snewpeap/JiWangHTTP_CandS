@@ -43,6 +43,9 @@ public class ServerHTTPService implements IService, Runnable {
     //接收的文件放置的文件夹
     private Path receiveContentDir;
 
+    //服务器的名字
+    private String serverName = "JiWangHTTPServer/1.0";
+
     public ServerHTTPService(int port) {
         this.port = port;
     }
@@ -62,18 +65,20 @@ public class ServerHTTPService implements IService, Runnable {
             listenerSelector = Selector.open();
             handlerSelector = Selector.open();
             keeper = new Keeper();
+
             ServerSocketChannel httpChannel = ServerSocketChannel.open();
             httpChannel.socket().bind(new InetSocketAddress(port));
-            log(String.format("HTTP service listen on port %d.", port));
+            log("HTTP service listen on port " + port);
             httpChannel.configureBlocking(false);
             httpChannel.register(listenerSelector, SelectionKey.OP_ACCEPT);
+
             receiveContentDir = Paths.get(System.getProperty("user.dir") + "\\receive");
             if (!Files.exists(receiveContentDir)) {
                 Files.createDirectory(receiveContentDir);
             }
             log("Set receive directory to " + receiveContentDir.toString());
-            isActive = true;
             log("HTTP service start successfully.");
+            isActive = true;
         } catch (IOException e) {
             err("Failed to start HTTP service.");
             e.printStackTrace();
@@ -142,9 +147,9 @@ public class ServerHTTPService implements IService, Runnable {
             }
             String req = sb.toString();
             System.out.println(req);
-            keeper.update(clientKey);//TODO: 根据请求头中的Connection属性值来维持或断开连接
+            keeper.update(clientKey);//一律保持长连接，不根据请求头中的Connection属性值来维持或断开连接
 
-            clientKey.attach("handling");
+            clientKey.attach("handling");//标志该key正在处理中
             String res = business(req);//由business业务方法来处理请求内容
 
             System.out.println(res);
@@ -174,16 +179,18 @@ public class ServerHTTPService implements IService, Runnable {
         final String CRLF = HTTPMessage.getCRLF();
         ResponseMessage res = new ResponseMessage(200);
 
+        int endPosOfHeader = req.indexOf(CRLF + CRLF);
         //对请求切片
-        List<String> headerFields = new ArrayList<>(Arrays.asList(req.substring(0, req.indexOf(CRLF + CRLF)).split(CRLF)));
+        List<String> headerFields = new ArrayList<>(Arrays.asList(req.substring(0, endPosOfHeader).split(CRLF)));
         List<String> reqLineParts = new ArrayList<>(Arrays.asList(headerFields.get(0).split(" ")));
         headerFields.remove(0);
+
         HTTPMethod reqMethod = HTTPMethod.valueOf(reqLineParts.get(0).toUpperCase());
         String resource = reqLineParts.get(1);
-        String content = req.substring(req.indexOf(CRLF + CRLF) + CRLF.length() * 2);
+        String content = req.substring(endPosOfHeader + CRLF.length() * 2);
 
-        URL url = this.getClass().getResource("/public" + resource);
-        if (url == null) {
+        URL publicResourceUrl = this.getClass().getResource("/public" + resource);//服务器公共资源都放在public文件夹下
+        if (publicResourceUrl == null) {
             res = new ResponseMessage(404);
             res.setProperty(
                     "Date",
@@ -192,28 +199,25 @@ public class ServerHTTPService implements IService, Runnable {
             return res.toString();
         }
         if (reqMethod == HTTPMethod.POST) {
-            try {
-                Path resourcePath = Paths.get(url.toURI());
-                if (!Files.exists(resourcePath)) {
-                    res = new ResponseMessage(404);
-                } else if (!Files.isDirectory(resourcePath)) {
-                    res = new ResponseMessage(405);
-                } else {
-                    String content_type = getField(headerFields, "content-type");
-                    try {
-                        String filename = putFile(content_type, content.getBytes(), resource);
-                        res.setProperty("content-location", resource + filename);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        res = new ResponseMessage(500);
-                    }
-                }
-            } catch (URISyntaxException use) {
+            Path resourcePath = receiveContentDir.resolve(resource.equals("/") ? "" : resource);
+            if (!Files.exists(resourcePath)) {
                 res = new ResponseMessage(404);
+            } else if (!Files.isDirectory(resourcePath)) {
+                res = new ResponseMessage(405);
+            } else {
+                String content_type = getField(headerFields, "content-type");
+                try {
+                    String filename = putFile(content_type, content.getBytes(), resource);
+                    //回应资源被保存的位置
+                    res.setProperty("content-location", resource + filename);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    res = new ResponseMessage(500);
+                }
             }
         } else {
             try {
-                Path resourcePath = getPath(url.toURI());
+                Path resourcePath = getPath(publicResourceUrl.toURI());
                 if (!Files.exists(resourcePath)) {
                     res = new ResponseMessage(404);
                 } else if (Files.isDirectory(resourcePath)) {
@@ -253,16 +257,16 @@ public class ServerHTTPService implements IService, Runnable {
                             sdf.format(last_modified)//用资源最后一次修改时间充当ETag
                     );
                     if (needContent) {
+                        String contentType = Files.probeContentType(resourcePath);
                         res.setProperty(
                                 "Content-Type",
-                                Files.probeContentType(resourcePath)
+                                contentType
                         );
-                        res.setContent(
-                                Files.probeContentType(resourcePath).toLowerCase().startsWith("image") ?
-                                        Base64.getMimeEncoder().encode(Files.readAllBytes(resourcePath))
-                                        :
-                                        Files.readAllBytes(resourcePath)
-                        );
+                        byte[] fileBytes = Files.readAllBytes(resourcePath);
+                        if (contentType.toLowerCase().startsWith("image")) {
+                            fileBytes = Base64.getMimeEncoder().encode(fileBytes);
+                        }
+                        res.setContent(fileBytes);
                     }
                 }
             } catch (URISyntaxException use) {
@@ -276,6 +280,10 @@ public class ServerHTTPService implements IService, Runnable {
         res.setProperty(
                 "Date",
                 sdf.format(new Date())
+        );
+        res.setProperty(
+                "Server",
+                serverName
         );
         return res.toString();
     }
@@ -296,6 +304,15 @@ public class ServerHTTPService implements IService, Runnable {
         }
     }
 
+    /**
+     * 保存文件
+     *
+     * @param content_type content-type
+     * @param content      内容字节流
+     * @param subDir       相对于/receive的子路径
+     * @return 保存文件的最终位置
+     * @throws Exception exception
+     */
     private String putFile(String content_type, byte[] content, String subDir) throws Exception {
         if (subDir.equals("/") || subDir.equals("\\")) {
             subDir = "";
@@ -419,10 +436,13 @@ public class ServerHTTPService implements IService, Runnable {
     /**
      * Inner Class Keeper
      * 监护者类维护计时来实现长连接
+     * 采用比较笨的轮询方法
+     *
+     * 了解到可以用延时队列来实现，555
      */
     private class Keeper implements Runnable {
         private Map<SelectionKey, Long> lastConn;
-        private long timeout = 10000;//允许的最大超市
+        private long timeout = 10000;//允许的最大超时，10秒
         private long lazyTime = timeout / 10;//扫描的懒惰时间，所有连接的剩余超时都大于此值时休息一段时间，采用谜之系数
 
         Keeper() {
@@ -437,6 +457,7 @@ public class ServerHTTPService implements IService, Runnable {
                 while (iterator.hasNext()) {
                     Map.Entry<SelectionKey, Long> conn = iterator.next();
                     SelectionKey key = conn.getKey();
+                    //若还在处理状态则不断开连接
                     if (key.attachment().equals("handling")) {
                         lastConn.replace(key, System.currentTimeMillis());
                         continue;
